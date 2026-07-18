@@ -1,0 +1,20 @@
+# A CMake config file for exact-dd, to be used by external projects via find_package(exact-dd)
+
+@PACKAGE_INIT@
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
+include(CMakeFindDependencyMacro)
+
+option(EXACT_DD_WITH_GMP "Library is configured to use GMP" @EXACT_DD_WITH_GMP@)
+if(EXACT_DD_WITH_GMP)
+    find_dependency(GMP)
+endif()
+
+if(NOT TARGET ExactDD::Core)
+    include("${CMAKE_CURRENT_LIST_DIR}/exact-dd-targets.cmake")
+endif()
+
+if(NOT exact-dd_FIND_QUIETLY)
+    message(STATUS "Found exact-dd version ${exact-dd_VERSION}")
+endif()

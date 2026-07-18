@@ -1,0 +1,8 @@
+.idea
+build*/
+dist*/
+install*/
+package*/
+.DS_Store
+.cache/
+specs/
