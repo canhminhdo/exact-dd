@@ -298,19 +298,8 @@ Integer Dw::quarticNorm() const {
 }
 
 std::complex<double> Dw::toComplexDouble() const {
-    const double sqrt2 = std::sqrt(2.0);
-    static const std::complex<double> omegaD{sqrt2 / 2.0, sqrt2 / 2.0};
-    static const std::complex<double> omegaD2 = omegaD * omegaD;
-    static const std::complex<double> omegaD3 = omegaD2 * omegaD;
-    const std::complex<double> value = static_cast<double>(a_)
-                                     + static_cast<double>(b_) * omegaD
-                                     + static_cast<double>(c_) * omegaD2
-                                     + static_cast<double>(d_) * omegaD3;
-    double scale = std::pow(2.0, static_cast<double>(k_ / 2));
-    if (k_ % 2 != 0) {
-        scale *= sqrt2;
-    }
-    return value / (scale * static_cast<double>(e_));
+    const std::complex<Float> value = toComplexFloat();
+    return {static_cast<double>(value.real()), static_cast<double>(value.imag())};
 }
 
 std::complex<Float> Dw::toComplexFloat() const {
