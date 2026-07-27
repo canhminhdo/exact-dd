@@ -26,6 +26,9 @@ template <class Node> struct DwEdge {
     }
     [[nodiscard]] bool operator!=(const DwEdge &other) const noexcept { return !(*this == other); }
 
+    [[nodiscard]] bool isZeroTerminal() const { return p == nullptr && w.isZero(); }
+    [[nodiscard]] bool isOneTerminal() const { return p == nullptr && w.isOne(); }
+
     [[nodiscard]] static DwEdge zero() { return {}; }
     [[nodiscard]] static DwEdge terminal(Dw weight) { return {nullptr, std::move(weight)}; }
 };
