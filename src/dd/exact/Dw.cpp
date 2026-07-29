@@ -182,6 +182,9 @@ Dw Dw::operator-() const { return {-a_, -b_, -c_, -d_, k_, e_}; }
 Dw Dw::operator-(const Dw &other) const { return *this + (-other); }
 
 Dw Dw::operator*(const Dw &other) const {
+    if (isOne()) return other;
+    if (other.isOne()) return *this;
+    if (isZero() || other.isZero()) return Dw::zero();
     const auto product = mulTuple({a_, b_, c_, d_}, {other.a_, other.b_, other.c_, other.d_});
     return {product[0], product[1], product[2], product[3], k_ + other.k_, e_ * other.e_};
 }
@@ -336,9 +339,9 @@ std::string Dw::toString() const {
 }
 
 std::size_t Dw::hash() const noexcept {
-    std::size_t h = std::hash<std::string>{}(a_.str());
+    std::size_t h = hash_value(a_);
     for (const Integer *v : {&b_, &c_, &d_, &e_}) {
-        h = HashUtil::combinedHash(h, std::hash<std::string>{}(v->str()));
+        h = HashUtil::combinedHash(h, hash_value(*v));
     }
     h = HashUtil::combinedHash(h, std::hash<std::size_t>{}(k_));
     return h;

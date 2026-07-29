@@ -32,9 +32,11 @@ Dw gcdNormalize(const std::vector<Dw *> &weights) {
     for (const Dw *w : weights)
         values.push_back(*w);
     const Dw eta = gcdOfMany(values).reduceAssociate();
-    const Dw etaInv = eta.inverse();
-    for (Dw *w : weights)
-        *w = *w * etaInv;
+    if (!eta.isOne()) {
+        const Dw etaInv = eta.inverse();
+        for (Dw *w : weights)
+            *w = *w * etaInv;
+    }
     return eta;
 }
 } // namespace
@@ -92,9 +94,11 @@ DwPackage::vEdge DwPackage::makeVEdge(int var, std::array<vEdge, 2> children) {
     Dw eta = Dw::one();
     if (strategy_ == NormalizationStrategy::Inverse) {
         eta = children[0].w.isZero() ? children[1].w : children[0].w; // leftmost nonzero
-        const Dw etaInv = eta.inverse();
-        children[0].w = children[0].w * etaInv;
-        children[1].w = children[1].w * etaInv;
+        if (!eta.isOne()) {
+            const Dw etaInv = eta.inverse();
+            children[0].w = children[0].w * etaInv;
+            children[1].w = children[1].w * etaInv;
+        }
     } else if (strategy_ == NormalizationStrategy::Gcd) {
         std::vector<Dw *> nonzero;
         if (!children[0].w.isZero())
@@ -139,9 +143,11 @@ DwPackage::mEdge DwPackage::makeMEdge(int var, std::array<mEdge, 4> children) {
         while (children[idx].w.isZero())
             ++idx; // guaranteed to terminate: not all zero, checked above
         eta = children[idx].w;
-        const Dw etaInv = eta.inverse();
-        for (auto &c : children)
-            c.w = c.w * etaInv;
+        if (!eta.isOne()) {
+            const Dw etaInv = eta.inverse();
+            for (auto &c : children)
+                c.w = c.w * etaInv;
+        }
     } else if (strategy_ == NormalizationStrategy::Gcd) {
         std::vector<Dw *> nonzero;
         for (auto &c : children)
