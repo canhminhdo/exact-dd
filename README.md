@@ -41,7 +41,8 @@ instead.
 
 - `BUILD_EXACT_DD_TESTS` (default `ON` when built standalone) — build the GoogleTest suite.
 - `BUILD_EXACT_DD_EXAMPLES` (default `ON` when built standalone) — build the `ExactDDMain` demo
-  executable (a Grover's-search circuit driver) under `src/examples/`.
+  executable (a Grover's-search circuit driver) and the `ExactDDBench` scaling benchmark, both
+  under `src/examples/`.
 - `EXACT_DD_WITH_GMP` (default `ON`) — back `Dw`'s arbitrary-precision integer type with GMP
   instead of Boost's `cpp_int`.
 - `EXACT_DD_INSTALL` (default `ON` when built standalone) — generate install rules and a CMake

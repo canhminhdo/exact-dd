@@ -42,10 +42,13 @@ Run a single test binary or filter to one test case with GoogleTest's built-in f
 
 - `BUILD_EXACT_DD_TESTS` (default `ON` standalone) — build the GoogleTest suite (`test/`).
 - `BUILD_EXACT_DD_EXAMPLES` (default `ON` standalone) — build the `ExactDDMain` demo executable
-  (Grover's-search / Hadamard-transform / GHZ-entanglement driver) at `src/examples/main.cpp`.
+  (Grover's-search / Hadamard-transform / GHZ-entanglement driver) at `src/examples/main.cpp`,
+  and `ExactDDBench`, the scaling benchmark at `src/examples/bench.cpp` (prints wall time and
+  node counts per qubit count for `innerProduct`, `outerProduct`, a GHZ measure sweep, and
+  Grover — use it to check a performance change against a recorded baseline).
 - `EXACT_DD_WITH_GMP` (default `ON`) — back `Dw`'s arbitrary-precision integer type with GMP
   instead of Boost's `cpp_int`. Incompatible with a universal (multi-arch) macOS build — pin
-  `-DCMAKE_OSX_ARCHITECTURES` to a single arch alongside it.
+  `-DCMAKE_OSX_ARCHITECTURES` to a single arch alongside it. GMP wins for large integers, while `cpp_int` wins for small integers.
 - `EXACT_DD_INSTALL` (default `OFF`) — generate install rules / CMake package config. Left off by
   default even standalone: the FetchContent-provided Boost target can't currently be part of the
   same `install(EXPORT ...)` set. The primary consumption path (add_subdirectory as a submodule)
