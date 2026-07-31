@@ -95,8 +95,8 @@ void Dw::canonicalize() {
         e_ = 1;
         return;
     }
-    reduceSqrt2Power();
     reduceRationalDenominator();
+    reduceSqrt2Power();
 }
 
 // Paper's Algorithm 1, "Compute Minimal D[w] Representation", translated
