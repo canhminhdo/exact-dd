@@ -776,23 +776,39 @@ Dw DwPackage::matrixEntry(const mEdge &m, const std::vector<bool> &rowBits, cons
 // stopping as soon as both operands look terminal, or it would undercount
 // by a factor of 2 per qubit that got reduced away this way (e.g. |+>,
 // whose two branches collapse to the same terminal edge).
-Dw DwPackage::innerProductRec(vEdge a, vEdge b, std::size_t level) const {
+// `memo` is local to one innerProduct() call (like outerProductRec's and
+// kroneckerRec's), not a persistent DwPackage member, which keeps this
+// method const and makes GC invalidation a non-issue.
+//
+// The inner product is conjugate-bilinear:
+//   <w_a*u | w_b*v> = conj(w_a) * w_b * <u|v>
+// so the bracketed <u|v> depends only on (a.p, b.p, level) and every caller
+// reaching that triple by a different path can share it.
+Dw DwPackage::innerProductRec(vEdge a, vEdge b, std::size_t level,
+                              std::unordered_map<detail::VVKey, Dw, detail::VVKeyHash> &memo) const {
     if (a.w.isZero() || b.w.isZero())
         return Dw::zero();
+    const Dw scale = a.w.conjugate() * b.w;
     if (level == 0)
-        return a.w.conjugate() * b.w;
+        return scale;
+
+    const detail::VVKey key{a.p, b.p, level};
+    if (auto it = memo.find(key); it != memo.end())
+        return scale * it->second;
 
     const int qubit = static_cast<int>(level - 1);
     const auto ac = vChildrenAt(a.p, qubit);
     const auto bc = vChildrenAt(b.p, qubit);
-    const vEdge a0{ac[0].p, a.w * ac[0].w};
-    const vEdge a1{ac[1].p, a.w * ac[1].w};
-    const vEdge b0{bc[0].p, b.w * bc[0].w};
-    const vEdge b1{bc[1].p, b.w * bc[1].w};
-    return innerProductRec(a0, b0, level - 1) + innerProductRec(a1, b1, level - 1);
+    const Dw unit = innerProductRec(ac[0], bc[0], level - 1, memo) + innerProductRec(ac[1], bc[1], level - 1, memo);
+
+    memo.emplace(key, unit);
+    return scale * unit;
 }
 
-Dw DwPackage::innerProduct(const vEdge &a, const vEdge &b) const { return innerProductRec(a, b, nqubits_); }
+Dw DwPackage::innerProduct(const vEdge &a, const vEdge &b) const {
+    std::unordered_map<detail::VVKey, Dw, detail::VVKeyHash> memo;
+    return innerProductRec(a, b, nqubits_, memo);
+}
 
 // ---------------------------------------------------------------------
 // Debug printing

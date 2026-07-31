@@ -41,7 +41,7 @@ struct PtrPairHash {
     }
 };
 
-/// Key for outerProductRec's per-call memo
+/// Key for outerProductRec's and innerProductRec's per-call memos.
 struct VVKey {
     DwVNode *x;
     DwVNode *y;
@@ -387,7 +387,8 @@ private:
     [[nodiscard]] Dw amplitudeRec(vEdge e, const std::vector<bool> &bits, std::size_t level) const;
     [[nodiscard]] Dw matrixEntryRec(mEdge e, const std::vector<bool> &rowBits, const std::vector<bool> &colBits,
                                      std::size_t level) const;
-    [[nodiscard]] Dw innerProductRec(vEdge a, vEdge b, std::size_t level) const;
+    [[nodiscard]] Dw innerProductRec(vEdge a, vEdge b, std::size_t level,
+                                      std::unordered_map<detail::VVKey, Dw, detail::VVKeyHash> &memo) const;
 
     // pooled node storage (MemoryManager) + unique tables (hash-consing)
     MemoryManager<DwVNode> vMemory_;

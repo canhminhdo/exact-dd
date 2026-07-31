@@ -6,10 +6,11 @@
 #include <boost/multiprecision/cpp_dec_float.hpp>
 
 #if defined(DD_EXACT_WITH_GMP)
-// Use GMP-backed types for maximum performance
+// GMP-backed types (by default), which handle coefficients grow large effectively
 #include <boost/multiprecision/gmp.hpp>
 #else
-// Use Boost's native C++ types
+// Boost's native C++ types, which keep small values inline rather than
+// heap-allocating every one. Faster only while coefficients stay small.
 #include <boost/multiprecision/cpp_int.hpp>
 #endif
 #include <complex>

@@ -95,8 +95,8 @@ void Dw::canonicalize() {
         e_ = 1;
         return;
     }
-    reduceSqrt2Power();
     reduceRationalDenominator();
+    reduceSqrt2Power();
 }
 
 // Paper's Algorithm 1, "Compute Minimal D[w] Representation", translated
@@ -140,8 +140,8 @@ void Dw::reduceRationalDenominator() {
     // Phase 2: Reduce gcd(a,b,c,d,e_) to 1.
     // Since e_ is now odd, gcd contains only odd prime factors.
     // Dividing (a,b,c,d) by an odd factor preserves the parity of (a-c)
-    // and (b-d), so no new sqrt(2) common factor can be exposed.
-    // Therefore, no need to call reduceSqrt2Power() afterward.
+    // and (b-d), so this phase alone can never expose a new sqrt(2) common
+    // factor -- only phase 1 above can.
     if (e_ != 1) {
         const Integer g = boost::multiprecision::gcd(
             boost::multiprecision::gcd(boost::multiprecision::gcd(a_, b_), boost::multiprecision::gcd(c_, d_)), e_);
