@@ -17,6 +17,7 @@ package_add_tests(
     test_gate_builders.cpp
     test_gate_matrices.cpp
     test_exact_dd_simulation.cpp
+    test_statistics.cpp
     test_grover.cpp
     test_qft.cpp
     test_shor.cpp

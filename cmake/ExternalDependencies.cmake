@@ -42,5 +42,25 @@ else()
     endif()
 endif()
 
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    set(JSON_VERSION
+        3.11.3
+        CACHE STRING "nlohmann_json version")
+    set(JSON_URL https://github.com/nlohmann/json/releases/download/v${JSON_VERSION}/json.tar.xz)
+    set(JSON_SystemInclude
+        ON
+        CACHE INTERNAL "Treat the library headers like system headers")
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        FetchContent_Declare(nlohmann_json URL ${JSON_URL} FIND_PACKAGE_ARGS ${JSON_VERSION})
+        list(APPEND FETCH_PACKAGES nlohmann_json)
+    else()
+        find_package(nlohmann_json ${JSON_VERSION} QUIET)
+        if(NOT nlohmann_json_FOUND)
+            FetchContent_Declare(nlohmann_json URL ${JSON_URL})
+            list(APPEND FETCH_PACKAGES nlohmann_json)
+        endif()
+    endif()
+endif()
+
 # Make all declared dependencies available.
 FetchContent_MakeAvailable(${FETCH_PACKAGES})

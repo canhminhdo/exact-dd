@@ -1,5 +1,6 @@
 #include "dd/exact/DwPackage.hpp"
 #include "dd/exact/DwGateMatrixDefinitions.hpp"
+#include "dd/exact/statistics/StatisticsConfig.hpp"
 #include "utility/HashUtil.hpp"
 
 #include <algorithm>
@@ -69,7 +70,18 @@ std::size_t VVKeyHash::operator()(const VVKey &k) const noexcept {
 } // namespace detail
 
 DwPackage::DwPackage(std::size_t nqubits, NormalizationStrategy strategy)
-    : nqubits_(nqubits), strategy_(strategy) {}
+    : nqubits_(nqubits), strategy_(strategy) {
+    // Entry sizes are the only table statistic that is neither tracked on
+    // the fly nor derivable from the map, so seed them once here. numBuckets
+    // is deliberately NOT seeded: std::unordered_map rehashes as it grows,
+    // so it is snapshotted at report time instead (TableStatistics).
+    if constexpr (kStatisticsEnabled) {
+        vUniqueStats_.entrySize = sizeof(decltype(vUnique_)::value_type);
+        mUniqueStats_.entrySize = sizeof(decltype(mUnique_)::value_type);
+        mvCacheStats_.entrySize = sizeof(decltype(mvCache_)::value_type);
+        mmCacheStats_.entrySize = sizeof(decltype(mmCache_)::value_type);
+    }
+}
 
 namespace {
 int topVar(DwVNode *p) { return p != nullptr ? p->var : -1; }
@@ -109,7 +121,9 @@ DwPackage::vEdge DwPackage::makeVEdge(int var, std::array<vEdge, 2> children) {
     }
 
     const detail::VKey key{var, children};
+    vUniqueStats_.trackLookup();
     if (auto it = vUnique_.find(key); it != vUnique_.end()) {
+        vUniqueStats_.trackHit();
         return {it->second, eta};
     }
 
@@ -117,6 +131,7 @@ DwPackage::vEdge DwPackage::makeVEdge(int var, std::array<vEdge, 2> children) {
     raw->var = var;
     raw->e = children;
     vUnique_.emplace(key, raw);
+    vUniqueStats_.trackInsert(vUnique_);
     return {raw, eta};
 }
 
@@ -157,7 +172,9 @@ DwPackage::mEdge DwPackage::makeMEdge(int var, std::array<mEdge, 4> children) {
     }
 
     const detail::MKey key{var, children};
+    mUniqueStats_.trackLookup();
     if (auto it = mUnique_.find(key); it != mUnique_.end()) {
+        mUniqueStats_.trackHit();
         return {it->second, eta};
     }
 
@@ -165,6 +182,7 @@ DwPackage::mEdge DwPackage::makeMEdge(int var, std::array<mEdge, 4> children) {
     raw->var = var;
     raw->e = children;
     mUnique_.emplace(key, raw);
+    mUniqueStats_.trackInsert(mUnique_);
     return {raw, eta};
 }
 
@@ -474,8 +492,11 @@ DwPackage::vEdge DwPackage::multiplyRec(mEdge a, vEdge b) {
         return {nullptr, scale};
 
     const std::pair<DwMNode *, DwVNode *> key{a.p, b.p};
-    if (auto it = mvCache_.find(key); it != mvCache_.end())
+    mvCacheStats_.trackLookup();
+    if (auto it = mvCache_.find(key); it != mvCache_.end()) {
+        mvCacheStats_.trackHit();
         return {it->second.p, scale * it->second.w};
+    }
 
     const int var = std::max(topVar(a.p), topVar(b.p));
     const auto m = mChildrenAt(a.p, var);
@@ -485,6 +506,7 @@ DwPackage::vEdge DwPackage::multiplyRec(mEdge a, vEdge b) {
     const vEdge resultUnit = makeVEdge(var, {r0, r1});
 
     mvCache_.emplace(key, resultUnit);
+    mvCacheStats_.trackInsert(mvCache_);
     return {resultUnit.p, scale * resultUnit.w};
 }
 
@@ -500,8 +522,11 @@ DwPackage::mEdge DwPackage::multiplyRec(mEdge a, mEdge b) {
         return {nullptr, scale};
 
     const std::pair<DwMNode *, DwMNode *> key{a.p, b.p};
-    if (auto it = mmCache_.find(key); it != mmCache_.end())
+    mmCacheStats_.trackLookup();
+    if (auto it = mmCache_.find(key); it != mmCache_.end()) {
+        mmCacheStats_.trackHit();
         return {it->second.p, scale * it->second.w};
+    }
 
     const int var = std::max(topVar(a.p), topVar(b.p));
     const auto x = mChildrenAt(a.p, var); // 00,01,10,11
@@ -514,6 +539,7 @@ DwPackage::mEdge DwPackage::multiplyRec(mEdge a, mEdge b) {
     const mEdge resultUnit = makeMEdge(var, {r00, r01, r10, r11});
 
     mmCache_.emplace(key, resultUnit);
+    mmCacheStats_.trackInsert(mmCache_);
     return {resultUnit.p, scale * resultUnit.w};
 }
 
@@ -978,6 +1004,12 @@ void DwPackage::incRef(const vEdge &e) {
         return;
     ++e.p->ref;
     if (e.p->ref == 1U) {
+        // 0 -> 1: the node just became externally reachable, which tracks an active entry on
+        // exactly this transition. Note that a node saturating at
+        // kMaxRefCount above is never decremented again and so stays
+        // counted as active -- garbageCollect()'s re-derivation bounds how
+        // far that can drift (see UniqueTableStatistics::trackGcSweep).
+        vUniqueStats_.trackActiveEntry();
         for (const auto &child : e.p->e)
             incRef(child);
     }
@@ -988,6 +1020,7 @@ void DwPackage::incRef(const mEdge &e) {
         return;
     ++e.p->ref;
     if (e.p->ref == 1U) {
+        mUniqueStats_.trackActiveEntry();
         for (const auto &child : e.p->e)
             incRef(child);
     }
@@ -999,6 +1032,9 @@ void DwPackage::decRef(const vEdge &e) {
     assert(e.p->ref > 0 && "Dw decRef: unbalanced incRef/decRef (refcount already zero)");
     --e.p->ref;
     if (e.p->ref == 0U) {
+        // 1 -> 0: the node is no longer an external root and is eligible
+        // for the next sweep. The counterpart of the incRef tracking above.
+        vUniqueStats_.untrackActiveEntry();
         for (const auto &child : e.p->e)
             decRef(child);
     }
@@ -1010,6 +1046,7 @@ void DwPackage::decRef(const mEdge &e) {
     assert(e.p->ref > 0 && "Dw decRef: unbalanced incRef/decRef (refcount already zero)");
     --e.p->ref;
     if (e.p->ref == 0U) {
+        mUniqueStats_.untrackActiveEntry();
         for (const auto &child : e.p->e)
             decRef(child);
     }
@@ -1029,6 +1066,9 @@ bool DwPackage::garbageCollect(bool force) {
             ++it;
         }
     }
+    // Placed after the early exit above, so gcRuns counts sweeps that
+    // actually ran rather than every call.
+    vUniqueStats_.trackGcSweep(vUnique_);
 
     std::size_t mFreed = 0;
     for (auto it = mUnique_.begin(); it != mUnique_.end();) {
@@ -1040,11 +1080,22 @@ bool DwPackage::garbageCollect(bool force) {
             ++it;
         }
     }
+    mUniqueStats_.trackGcSweep(mUnique_);
 
     // A stale pointer to a freed node in either cache is unsafe regardless
     // of which table it came from, since mvCache_ is keyed on (mEdge*,
     // vEdge*) pairs -- mirrors MQT Core's rule that matrixVectorMultiplication
     // is cleared whenever either node type is collected.
+    //
+    // The corresponding compute-table statistics are deliberately NOT reset
+    // here. MQT Core's ComputeTable::clear() calls stats.reset(), but that
+    // only zeroes numEntries, which is snapshotted from the map anyway
+    // (TableStatistics::snapshot), so the call would be a no-op; keeping
+    // lookups/hits/inserts cumulative over the package's whole lifetime is
+    // strictly more informative. The consequence, noted in
+    // PackageStatistics, is that a compute table's numEntries reflects the
+    // cache since the last collection while its other counters are lifetime
+    // totals.
     if (vFreed > 0 || mFreed > 0)
         mvCache_.clear();
     if (mFreed > 0)

@@ -3,6 +3,9 @@
 
 #include "dd/exact/DwNode.hpp"
 #include "dd/exact/MemoryManager.hpp"
+#include "dd/exact/statistics/PackageStatistics.hpp"
+#include "dd/exact/statistics/TableStatistics.hpp"
+#include "dd/exact/statistics/UniqueTableStatistics.hpp"
 #include "utility/HashUtil.hpp"
 
 #include <array>
@@ -312,6 +315,20 @@ public:
     [[nodiscard]] std::size_t vNodeCount() const { return vUnique_.size(); }
     [[nodiscard]] std::size_t mNodeCount() const { return mUnique_.size(); }
 
+    /// A snapshot of this package's unique-table, memory-manager and
+    /// compute-table statistics.
+    /// Returned by value with the map-derived fields refreshed on the copy,
+    /// which is what lets this be const -- see PackageStatistics.
+    ///
+    /// When built with EXACT_DD_STATISTICS=OFF every counter is zero and
+    /// PackageStatistics::json() emits a "statistics_disabled" marker
+    /// instead of the usual key tree. vNodeCount()/mNodeCount() above stay
+    /// accurate in both configurations.
+    [[nodiscard]] PackageStatistics statistics() const;
+
+    [[nodiscard]] std::string statisticsString() const { return statistics().toString(); }
+    void printStatistics(std::ostream &os = std::cout) const { os << statisticsString(); }
+
     /// Increments the reference count of e.p (and, only the first time it
     /// becomes reachable, recursively of its children), marking it and
     /// everything below it as an external root that garbageCollect() must
@@ -405,6 +422,14 @@ private:
     // compute tables (memoization), keyed on unit-weight node pointer pairs
     std::unordered_map<std::pair<DwMNode *, DwVNode *>, vEdge, detail::PtrPairHash> mvCache_;
     std::unordered_map<std::pair<DwMNode *, DwMNode *>, mEdge, detail::PtrPairHash> mmCache_;
+
+    // Statistics for the four package-owned tables; the two MemoryManagers
+    // carry their own. Every write to these compiles away when
+    // EXACT_DD_STATISTICS is OFF, and statistics() folds all six into one report.
+    UniqueTableStatistics vUniqueStats_;
+    UniqueTableStatistics mUniqueStats_;
+    TableStatistics mvCacheStats_;
+    TableStatistics mmCacheStats_;
 };
 
 } // namespace dd::exact

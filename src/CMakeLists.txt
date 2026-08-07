@@ -4,6 +4,11 @@ add_library(
     dd/exact/DwPackage.cpp
     dd/exact/DwGateMatrixDefinitions.cpp
     dd/exact/ExactDDSimulation.cpp
+    dd/exact/statistics/Statistics.cpp
+    dd/exact/statistics/TableStatistics.cpp
+    dd/exact/statistics/UniqueTableStatistics.cpp
+    dd/exact/statistics/MemoryManagerStatistics.cpp
+    dd/exact/statistics/PackageStatistics.cpp
     utility/StringHelper.cpp
 )
 add_library(ExactDD::Core ALIAS ExactDD)
@@ -15,7 +20,7 @@ target_include_directories(
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(ExactDD PUBLIC cxx_std_17)
-target_link_libraries(ExactDD PUBLIC Boost::multiprecision)
+target_link_libraries(ExactDD PUBLIC Boost::multiprecision nlohmann_json::nlohmann_json)
 # Warning suppression policy should not be forced on consumers
 target_compile_options(ExactDD PRIVATE -Wno-deprecated-literal-operator)
 
@@ -39,6 +44,12 @@ if(EXACT_DD_WITH_GMP)
     find_package(GMP REQUIRED)
     target_compile_definitions(ExactDD PUBLIC DD_EXACT_WITH_GMP)
     target_link_libraries(ExactDD PUBLIC GMP::gmp GMP::gmpxx)
+endif()
+
+# Statistics / instrumentation
+option(EXACT_DD_STATISTICS "Collect DD package statistics (unique tables, memory managers, compute tables)" ON)
+if(EXACT_DD_STATISTICS)
+    target_compile_definitions(ExactDD PUBLIC DD_EXACT_STATISTICS)
 endif()
 
 option(BUILD_EXACT_DD_EXAMPLES "Build example executables for exact-dd" ${EXACT_DD_MASTER_PROJECT})

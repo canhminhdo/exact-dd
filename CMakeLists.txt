@@ -37,11 +37,14 @@ if(BUILD_EXACT_DD_TESTS)
 endif()
 
 # Off by default even for standalone builds: exporting ExactDD requires the
-# FetchContent-provided Boost.Multiprecision target to be part of the same
+# FetchContent-provided Boost.Multiprecision target and nlohmann_json to be part of the same
 # export set, which install(EXPORT ...) does not support out of the box. The
 # primary way to consume this library (add_subdirectory as a git submodule,
 # as QRAT does) doesn't need install/find_package support at all; opt in with
-# -DEXACT_DD_INSTALL=ON only if you've resolved that export limitation.
+# -DEXACT_DD_INSTALL=ON only if you've resolved that export limitation --
+# which also means adding find_dependency(nlohmann_json) to
+# cmake/exact-dd-config.cmake.in and recording the DD_EXACT_STATISTICS
+# definition in the export, since it must match in every consumer.
 option(EXACT_DD_INSTALL "Generate installation instructions for exact-dd" OFF)
 if(EXACT_DD_INSTALL)
     include(cmake/InstallAndPackage.cmake)

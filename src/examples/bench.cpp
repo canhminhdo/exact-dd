@@ -9,6 +9,12 @@
 // change to DwPackage/Dw can be judged against a recorded baseline rather
 // than against intuition.
 //
+// NOTE ON BASELINES: with EXACT_DD_STATISTICS=ON (the default) the timings
+// below include one counter increment per unique-table and compute-table
+// probe, i.e. on the hottest path in the package. Record and compare
+// baselines at a fixed setting, and prefer -DEXACT_DD_STATISTICS=OFF for a
+// clean measurement of a DwPackage/Dw change.
+//
 
 #include "dd/exact/DwPackage.hpp"
 #include "dd/exact/DwGateMatrixDefinitions.hpp"
@@ -181,6 +187,33 @@ void benchGrover(const std::vector<std::size_t> &sizes) {
     }
 }
 
+// One full statistics dump on a workload that touches all four tables: the
+// GHZ build hits both unique tables and the matrix-vector cache, the
+// outerProduct populates the matrix unique table further, and the forced
+// collection gives the memory managers entries to hand back out. Printed
+// once rather than per size -- the point is the shape of the report, not a
+// scaling curve, so reportHeader/reportRow are deliberately left alone and
+// the timing tables above stay comparable against recorded baselines.
+void benchStatisticsReport(std::size_t n) {
+    std::cout << "\n=== statistics report (" << n << " qubits) ===\n";
+
+    DwPackage pkg(n);
+    auto state = pkg.makeZeroState();
+    pkg.incRef(state);
+    const std::size_t control = n - 1;
+    state = pkg.applyOperation(pkg.makeSingleQubitGateDD(control, gates::h()), state);
+    for (std::size_t q = 0; q < control; ++q)
+        state = pkg.applyOperation(pkg.makeControlledSingleQubitGateDD(control, q, gates::x()), state);
+
+    const auto op = pkg.outerProduct(state, state);
+    if (op.w.isZero())
+        std::cout << "  !! unexpected zero operator\n";
+    pkg.garbageCollect(true);
+
+    pkg.printStatistics();
+    std::cout << "\n";
+}
+
 } // namespace
 
 // With no arguments, runs the whole suite at sizes that stay well under a
@@ -205,6 +238,7 @@ int main(int argc, char **argv) {
     benchGhzMeasureSweep({4, 8, 12, 16});
     benchOuterProduct({4, 8, 12, 16});
     benchGrover({6, 10, 14});
+    benchStatisticsReport(12);
 
     std::cout << "\ndone\n";
     return 0;

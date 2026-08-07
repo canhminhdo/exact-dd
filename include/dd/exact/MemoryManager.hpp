@@ -2,6 +2,7 @@
 #define DD_EXACT_MEMORY_MANAGER_HPP
 
 #include "dd/exact/DwNode.hpp"
+#include "dd/exact/statistics/MemoryManagerStatistics.hpp"
 
 #include <cstddef>
 #include <type_traits>
@@ -22,6 +23,10 @@ namespace dd::exact {
  * vector grows: growing chunks_ moves (never copies) its std::vector<T>
  * elements, and moving a std::vector preserves the validity of pointers
  * into its element storage.
+ *
+ * Allocation and reuse are counted into a MemoryManagerStatistics<T>, which
+ * statistics() exposes and DwPackage folds into its own report. Every one
+ * of those tracking calls compiles away when EXACT_DD_STATISTICS is OFF.
  */
 template <typename T> class MemoryManager {
     static_assert(std::is_same_v<decltype(T::next), T *>, "T must have a `next` member of type T*");
@@ -35,7 +40,9 @@ public:
 
     explicit MemoryManager(std::size_t initialAllocationSize = kInitialAllocationSize)
         : chunks_(1, std::vector<T>(initialAllocationSize)), chunkIt_(chunks_[0].begin()),
-          chunkEndIt_(chunks_[0].end()) {}
+          chunkEndIt_(chunks_[0].end()) {
+        stats_.trackInitialAllocation(initialAllocationSize);
+    }
 
     // available_/chunkIt_/chunkEndIt_ point into this object's own chunks_;
     // copying would leave those pointers/iterators referring to the
@@ -55,12 +62,14 @@ public:
         if (available_ != nullptr) {
             entry = available_;
             available_ = available_->next;
+            stats_.trackReusedEntries();
         } else {
             if (chunkIt_ == chunkEndIt_) {
                 allocateNewChunk();
             }
             entry = &*chunkIt_;
             ++chunkIt_;
+            stats_.trackUsedEntries();
         }
         entry->ref = 0;
         return entry;
@@ -72,7 +81,12 @@ public:
     void returnEntry(T *entry) noexcept {
         entry->next = available_;
         available_ = entry;
+        stats_.trackReturnedEntry();
     }
+
+    /// Allocation and reuse counters for this manager. All zero when built
+    /// with EXACT_DD_STATISTICS=OFF.
+    [[nodiscard]] const MemoryManagerStatistics<T> &statistics() const noexcept { return stats_; }
 
 private:
     void allocateNewChunk() {
@@ -80,6 +94,7 @@ private:
         chunks_.emplace_back(nextSize);
         chunkIt_ = chunks_.back().begin();
         chunkEndIt_ = chunks_.back().end();
+        stats_.trackAllocation(nextSize);
     }
 
     /// Singly linked list (via T::next) of entries available for reuse.
@@ -89,6 +104,11 @@ private:
     std::vector<std::vector<T>> chunks_;
     typename std::vector<T>::iterator chunkIt_;
     typename std::vector<T>::iterator chunkEndIt_;
+
+    /// Note that its numAvailableForReuse is the only way to know how long
+    /// the free list is: available_ is a bare singly linked list threaded
+    /// through T::next, with no size of its own.
+    MemoryManagerStatistics<T> stats_{};
 };
 
 } // namespace dd::exact

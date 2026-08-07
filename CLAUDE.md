@@ -24,9 +24,10 @@ cmake --build build --config Release -j 8
 ctest --test-dir build
 ```
 
-Boost.Multiprecision is fetched automatically via `FetchContent` (`cmake/ExternalDependencies.cmake`);
-pass `-DUSE_SYSTEM_BOOST=ON` to use a system installation instead. In-source builds are rejected
-by CMakeLists.txt.
+Boost.Multiprecision and nlohmann_json are fetched automatically via `FetchContent`
+(`cmake/ExternalDependencies.cmake`); pass `-DUSE_SYSTEM_BOOST=ON` to use a system Boost instead.
+The nlohmann_json block is skipped when the target already exists. In-source builds are
+rejected by CMakeLists.txt.
 
 Run a single test binary or filter to one test case with GoogleTest's built-in flag:
 
@@ -49,10 +50,16 @@ Run a single test binary or filter to one test case with GoogleTest's built-in f
 - `EXACT_DD_WITH_GMP` (default `ON`) — back `Dw`'s arbitrary-precision integer type with GMP
   instead of Boost's `cpp_int`. Incompatible with a universal (multi-arch) macOS build — pin
   `-DCMAKE_OSX_ARCHITECTURES` to a single arch alongside it. GMP wins for large integers, while `cpp_int` wins for small integers.
+- `EXACT_DD_STATISTICS` (default `ON`) — collect DD package statistics (unique tables, memory
+  managers, compute tables) and report them via `DwPackage::statistics()`. Sets the PUBLIC compile
+  definition `DD_EXACT_STATISTICS`; when OFF, every tracking call compiles to nothing and
+  `PackageStatistics::json()` emits a `statistics_disabled` marker instead of a tree of zeros.
+  Turn it off when recording performance baselines with `ExactDDBench`, since the counters add an
+  increment per table probe on the hottest path.
 - `EXACT_DD_INSTALL` (default `OFF`) — generate install rules / CMake package config. Left off by
-  default even standalone: the FetchContent-provided Boost target can't currently be part of the
-  same `install(EXPORT ...)` set. The primary consumption path (add_subdirectory as a submodule)
-  doesn't need this.
+  default even standalone: the FetchContent-provided Boost and nlohmann_json targets can't
+  currently be part of the same `install(EXPORT ...)` set. The primary consumption path
+  (add_subdirectory as a submodule) doesn't need this.
 
 When consumed via `add_subdirectory` from another project (`EXACT_DD_MASTER_PROJECT` becomes
 `OFF`), tests and examples are not built unless explicitly turned on by the parent.
@@ -112,6 +119,17 @@ design. Key things to know when touching it:
   exact `Dw` ratio and only convert to `double` at the final step (see `fidelity()`).
 - `DwPackage` is move-only (copying would leave unique tables pointing at the original's pooled
   node storage).
+
+**Statistics** (`include/dd/exact/statistics/`, `src/dd/exact/statistics/`) mirrors MQT Core's
+`dd/statistics/` module: `Statistics` (JSON/`toString`/`operator<<` base) → `TableStatistics`
+(hash-table counters) → `UniqueTableStatistics` (adds active entries + gc runs), plus the templated
+`MemoryManagerStatistics<T>` and the `PackageStatistics` aggregate that `DwPackage::statistics()`
+returns. Three things differ from MQT Core and are documented at length in the headers: the report
+is a `const` member returning a by-value snapshot (DwPackage's members are private, unlike MQT's
+`Package`); `collisions` is a current-state bucket measure computed at report time rather than MQT's
+cumulative chain-step count (an insert-time probe would re-hash a `VKey`/`MKey` on the hot path);
+and every MiB figure is a lower bound, since each `Dw`'s arbitrary-precision limbs live on the heap
+where `sizeof` cannot see them. All tracking compiles away under `EXACT_DD_STATISTICS=OFF`.
 
 **`ExactDDSimulation`** (`include/dd/exact/ExactDDSimulation.hpp`,
 `src/dd/exact/ExactDDSimulation.cpp`) is a thin standalone driver on top of `DwPackage`: owns one
