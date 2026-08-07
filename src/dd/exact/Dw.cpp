@@ -37,10 +37,15 @@ std::array<Integer, 4> scaleUp(std::array<Integer, 4> tuple, std::size_t steps) 
     const std::size_t half = steps / 2;
     if (half != 0) {
         const Integer twoPowHalf = Integer(1) << half; // 2^half exactly
-        tuple = mulTuple(tuple, {twoPowHalf, 0, 0, 0});
+        for (auto &x : tuple) {
+            x *= twoPowHalf;
+        }
+        // tuple = mulTuple(tuple, {twoPowHalf, 0, 0, 0});
     }
     if ((steps & 1U) != 0U) {
-        tuple = mulTuple(tuple, kSqrt2Tuple);
+        const auto &[a, b, c, d] = tuple;
+        tuple = {b - d, a + c, b + d, c - a}; // multiply by sqrt(2) = w - w^3
+        // tuple = mulTuple(tuple, kSqrt2Tuple);
     }
     // for (std::size_t i = 0; i < steps; ++i) {
     //     tuple = mulTuple(tuple, kSqrt2Tuple);
