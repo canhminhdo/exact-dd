@@ -504,12 +504,12 @@ std::array<DwPackage::vEdge, 2> DwPackage::vChildrenAt(DwVNode *p, int var) {
     return {vEdge{p, Dw::one()}, vEdge{p, Dw::one()}};
 }
 
-DwPackage::vEdge DwPackage::multiplyRec(mEdge a, vEdge b) {
+DwPackage::vEdge DwPackage::multiplyRec(const mEdge &a, const vEdge &b) {
     if (a.w.isZero() || b.w.isZero())
         return vEdge::zero();
-    const Dw scale = a.w * b.w;
+    Dw scale = a.w * b.w;
     if (a.p == nullptr && b.p == nullptr)
-        return {nullptr, scale};
+        return {nullptr, std::move(scale)};
 
     const std::pair<DwMNode *, DwVNode *> key{a.p, b.p};
     mvCacheStats_.trackLookup();
@@ -534,12 +534,12 @@ DwPackage::vEdge DwPackage::multiply(const mEdge &m, const vEdge &v) {
     return multiplyRec(m, v);
 }
 
-DwPackage::mEdge DwPackage::multiplyRec(mEdge a, mEdge b) {
+DwPackage::mEdge DwPackage::multiplyRec(const mEdge &a, const mEdge &b) {
     if (a.w.isZero() || b.w.isZero())
         return mEdge::zero();
-    const Dw scale = a.w * b.w;
+    Dw scale = a.w * b.w;
     if (a.p == nullptr && b.p == nullptr)
-        return {nullptr, scale};
+        return {nullptr, std::move(scale)};
 
     const std::pair<DwMNode *, DwMNode *> key{a.p, b.p};
     mmCacheStats_.trackLookup();
@@ -565,6 +565,12 @@ DwPackage::mEdge DwPackage::multiplyRec(mEdge a, mEdge b) {
 
 DwPackage::mEdge DwPackage::multiply(const mEdge &a, const mEdge &b) { return multiplyRec(a, b); }
 
+// Both addRec overloads keep their by-value parameters, unlike the recursive
+// functions around them. Two reasons, and neither is an oversight: they RETURN
+// a parameter on the zero-weight early-outs below, where an automatic object is
+// implicitly moved but a const reference would have to be copied; and every
+// recursive call site passes a prvalue, which C++17 already constructs directly
+// into the parameter. Switching to const& would lose the moves and gain nothing.
 DwPackage::vEdge DwPackage::addRec(vEdge a, vEdge b) {
     if (a.w.isZero())
         return b;
@@ -626,7 +632,7 @@ DwPackage::mEdge DwPackage::addRec(mEdge a, mEdge b) {
 // the "unit" result (ignoring the particular x.w that reached this node
 // on any given call), rescaled by the caller's x.w on every use, exactly
 // mirroring mvCache_'s rescale-on-hit convention.
-DwPackage::vEdge DwPackage::kroneckerRec(vEdge x, vEdge y, std::size_t yNumQubits, bool incIdx,
+DwPackage::vEdge DwPackage::kroneckerRec(const vEdge &x, const vEdge &y, std::size_t yNumQubits, bool incIdx,
                                           std::unordered_map<DwVNode *, vEdge> &memo) {
     if (x.w.isZero() || y.w.isZero())
         return vEdge::zero();
@@ -653,7 +659,7 @@ DwPackage::vEdge DwPackage::kronecker(const vEdge &x, const vEdge &y, std::size_
     return kroneckerRec(x, y, yNumQubits, incIdx, memo);
 }
 
-DwPackage::mEdge DwPackage::kroneckerRec(mEdge x, mEdge y, std::size_t yNumQubits, bool incIdx,
+DwPackage::mEdge DwPackage::kroneckerRec(const mEdge &x, const mEdge &y, std::size_t yNumQubits, bool incIdx,
                                           std::unordered_map<DwMNode *, mEdge> &memo) {
     if (x.w.isZero() || y.w.isZero())
         return mEdge::zero();
@@ -711,7 +717,7 @@ DwPackage::mEdge DwPackage::kronecker(const mEdge &x, const mEdge &y, std::size_
 // pass-through means the same node can legitimately recur at multiple
 // different levels, so dropping level from the key would reuse a result
 // computed for the wrong number of remaining qubits.
-DwPackage::mEdge DwPackage::outerProductRec(vEdge x, vEdge y, std::size_t level,
+DwPackage::mEdge DwPackage::outerProductRec(const vEdge &x, const vEdge &y, std::size_t level,
                                              std::unordered_map<detail::VVKey, mEdge, detail::VVKeyHash> &memo) {
     if (x.w.isZero() || y.w.isZero())
         return mEdge::zero();
@@ -766,13 +772,12 @@ double DwPackage::fidelity(const vEdge &a, const vEdge &b) const {
     return numD / denomD;
 }
 
-Dw DwPackage::amplitudeRec(vEdge e, const std::vector<bool> &bits, std::size_t level) const {
+Dw DwPackage::amplitudeRec(const vEdge &e, const std::vector<bool> &bits, std::size_t level) const {
     if (level == 0)
         return e.w;
     const std::size_t qubit = level - 1;
     if (e.p != nullptr && e.p->var == static_cast<int>(qubit)) {
-        const vEdge child = e.p->e[bits[qubit] ? 1 : 0];
-        return e.w * amplitudeRec(child, bits, level - 1);
+        return e.w * amplitudeRec(e.p->e[bits[qubit] ? 1 : 0], bits, level - 1);
     }
     // Doesn't depend on this qubit: continue with the same node pointer
     // (or nullptr terminal) and unit weight for the remaining levels.
@@ -792,7 +797,7 @@ Dw DwPackage::amplitude(const vEdge &v, const std::vector<bool> &bits) const {
 // mChildrenAt's identical "identity-tensor expansion"), not a value
 // independent of it: the off-diagonal entries of that block are zero, only
 // the diagonal (rowBits[qubit] == colBits[qubit]) carries e.p through.
-Dw DwPackage::matrixEntryRec(mEdge e, const std::vector<bool> &rowBits, const std::vector<bool> &colBits,
+Dw DwPackage::matrixEntryRec(const mEdge &e, const std::vector<bool> &rowBits, const std::vector<bool> &colBits,
                               std::size_t level) const {
     if (level == 0)
         return e.w;
@@ -801,8 +806,7 @@ Dw DwPackage::matrixEntryRec(mEdge e, const std::vector<bool> &rowBits, const st
     const std::size_t qubit = level - 1;
     if (e.p != nullptr && e.p->var == static_cast<int>(qubit)) {
         const std::size_t idx = (rowBits[qubit] ? 2U : 0U) + (colBits[qubit] ? 1U : 0U);
-        const mEdge child = e.p->e[idx];
-        return e.w * matrixEntryRec(child, rowBits, colBits, level - 1);
+        return e.w * matrixEntryRec(e.p->e[idx], rowBits, colBits, level - 1);
     }
     if (rowBits[qubit] != colBits[qubit])
         return Dw::zero();
@@ -832,7 +836,7 @@ Dw DwPackage::matrixEntry(const mEdge &m, const std::vector<bool> &rowBits, cons
 //   <w_a*u | w_b*v> = conj(w_a) * w_b * <u|v>
 // so the bracketed <u|v> depends only on (a.p, b.p, level) and every caller
 // reaching that triple by a different path can share it.
-Dw DwPackage::innerProductRec(vEdge a, vEdge b, std::size_t level,
+Dw DwPackage::innerProductRec(const vEdge &a, const vEdge &b, std::size_t level,
                               std::unordered_map<detail::VVKey, Dw, detail::VVKeyHash> &memo) const {
     if (a.w.isZero() || b.w.isZero())
         return Dw::zero();

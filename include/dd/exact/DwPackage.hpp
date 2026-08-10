@@ -389,22 +389,22 @@ private:
     [[nodiscard]] mEdge makeDDFromMatrixRec(const std::vector<std::vector<Dw>> &matrix, std::size_t rowStart,
                                              std::size_t rowEnd, std::size_t colStart, std::size_t colEnd);
 
-    [[nodiscard]] vEdge multiplyRec(mEdge a, vEdge b);
-    [[nodiscard]] mEdge multiplyRec(mEdge a, mEdge b);
+    [[nodiscard]] vEdge multiplyRec(const mEdge &a, const vEdge &b);
+    [[nodiscard]] mEdge multiplyRec(const mEdge &a, const mEdge &b);
     [[nodiscard]] vEdge addRec(vEdge a, vEdge b);
     [[nodiscard]] mEdge addRec(mEdge a, mEdge b);
 
-    [[nodiscard]] vEdge kroneckerRec(vEdge x, vEdge y, std::size_t yNumQubits, bool incIdx,
+    [[nodiscard]] vEdge kroneckerRec(const vEdge &x, const vEdge &y, std::size_t yNumQubits, bool incIdx,
                                       std::unordered_map<DwVNode *, vEdge> &memo);
-    [[nodiscard]] mEdge kroneckerRec(mEdge x, mEdge y, std::size_t yNumQubits, bool incIdx,
+    [[nodiscard]] mEdge kroneckerRec(const mEdge &x, const mEdge &y, std::size_t yNumQubits, bool incIdx,
                                       std::unordered_map<DwMNode *, mEdge> &memo);
-    [[nodiscard]] mEdge outerProductRec(vEdge x, vEdge y, std::size_t level,
+    [[nodiscard]] mEdge outerProductRec(const vEdge &x, const vEdge &y, std::size_t level,
                                          std::unordered_map<detail::VVKey, mEdge, detail::VVKeyHash> &memo);
 
-    [[nodiscard]] Dw amplitudeRec(vEdge e, const std::vector<bool> &bits, std::size_t level) const;
-    [[nodiscard]] Dw matrixEntryRec(mEdge e, const std::vector<bool> &rowBits, const std::vector<bool> &colBits,
+    [[nodiscard]] Dw amplitudeRec(const vEdge &e, const std::vector<bool> &bits, std::size_t level) const;
+    [[nodiscard]] Dw matrixEntryRec(const mEdge &e, const std::vector<bool> &rowBits, const std::vector<bool> &colBits,
                                      std::size_t level) const;
-    [[nodiscard]] Dw innerProductRec(vEdge a, vEdge b, std::size_t level,
+    [[nodiscard]] Dw innerProductRec(const vEdge &a, const vEdge &b, std::size_t level,
                                       std::unordered_map<detail::VVKey, Dw, detail::VVKeyHash> &memo) const;
 
     // pooled node storage (MemoryManager) + unique tables (hash-consing)
