@@ -1,4 +1,5 @@
 #include "dd/exact/ExactDDSimulation.hpp"
+#include "dd/exact/DwPackage.hpp"
 
 #include <gtest/gtest.h>
 
@@ -171,4 +172,62 @@ TEST(Grover, NativeMultiControlledZMatchesDecomposedSearch) {
     // Same exact probability as the ancilla-based decomposition above:
     // sin^2(9*theta), theta = asin(1/sqrt(32)).
     EXPECT_NEAR(markedAmp.normSquared().toComplexDouble().real(), 0.9991823155432941, 1e-12);
+}
+
+// The existing strategy coverage (DwGateBuilders.NormalizationStrategyInvariance)
+// exercises the matrix gate builders on 3 qubits and nothing else -- it never
+// reaches makeVEdge, multiply or add. Those are precisely the paths a real
+// algorithm spends its time in, so a full Grover run under a non-default
+// strategy would otherwise be running on code no test has driven.
+//
+// Every strategy must produce the same represented state (the DD shape may
+// differ; the amplitudes may not). Amplitudes are compared exactly -- these
+// are D[w] values, so there is no tolerance to allow for.
+TEST(Grover, AllNormalizationStrategiesAgreeOnTheFullSearch) {
+    constexpr std::size_t n = 5;
+    const std::vector<std::size_t> controls{0, 1, 2, 3};
+
+    const auto run = [&](dd::exact::NormalizationStrategy strategy) {
+        ExactDDSimulation sim(n, strategy);
+        for (std::size_t q = 0; q < n; ++q)
+            sim.applyGate("h", q);
+        // 4 iterations is the optimal count for n = 5.
+        for (int it = 0; it < 4; ++it) {
+            sim.applyMultiControlledGate("z", controls, n - 1); // oracle: mark |1...1>
+            for (std::size_t q = 0; q < n; ++q)
+                sim.applyGate("h", q);
+            for (std::size_t q = 0; q < n; ++q)
+                sim.applyGate("x", q);
+            sim.applyMultiControlledGate("z", controls, n - 1);
+            for (std::size_t q = 0; q < n; ++q)
+                sim.applyGate("x", q);
+            for (std::size_t q = 0; q < n; ++q)
+                sim.applyGate("h", q);
+        }
+        std::vector<Dw> amplitudes;
+        amplitudes.reserve(std::size_t{1} << n);
+        for (std::size_t i = 0; i < (std::size_t{1} << n); ++i) {
+            std::vector<bool> bits(n);
+            for (std::size_t q = 0; q < n; ++q)
+                bits[q] = ((i >> q) & 1U) != 0;
+            amplitudes.push_back(sim.amplitude(bits));
+        }
+        return amplitudes;
+    };
+
+    const auto reference = run(dd::exact::NormalizationStrategy::Inverse);
+    // Sanity: the search actually amplified something, so an all-equal vector
+    // cannot pass this test vacuously.
+    const Dw marked = reference.back(); // |1...1>
+    EXPECT_GT(marked.normSquared().toComplexDouble().real(), 0.9);
+
+    for (const auto strategy :
+         {dd::exact::NormalizationStrategy::None, dd::exact::NormalizationStrategy::Gcd}) {
+        const auto amplitudes = run(strategy);
+        ASSERT_EQ(amplitudes.size(), reference.size());
+        for (std::size_t i = 0; i < amplitudes.size(); ++i) {
+            EXPECT_EQ(amplitudes[i], reference[i])
+                << "strategy " << static_cast<int>(strategy) << " differs at basis state " << i;
+        }
+    }
 }

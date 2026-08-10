@@ -379,7 +379,7 @@ private:
     /// child is the corresponding entry of the identity operator --
     /// T(Dw::one()) if the entry being wrapped sits on the block diagonal
     /// (`diagonal`), zero otherwise.
-    [[nodiscard]] mEdge wrapWithControl(std::size_t ctrl, const mEdge &active, bool diagonal);
+    [[nodiscard]] mEdge wrapWithControl(std::size_t ctrl, mEdge active, bool diagonal);
 
     [[nodiscard]] static std::array<mEdge, 4> mChildrenAt(DwMNode *p, int var);
     [[nodiscard]] static std::array<vEdge, 2> vChildrenAt(DwVNode *p, int var);

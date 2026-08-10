@@ -10,6 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace dd::exact {
@@ -96,7 +97,7 @@ DwPackage::vEdge DwPackage::makeVEdge(int var, std::array<vEdge, 2> children) {
     if (children[0].w.isZero() && children[1].w.isZero())
         return vEdge::zero();
     if (children[0] == children[1])
-        return children[0];
+        return std::move(children[0]);
 
     // Node-weight normalization (see NormalizationStrategy): factor a value
     // eta out of the (about-to-be-created-or-shared) node's outgoing edge
@@ -105,11 +106,16 @@ DwPackage::vEdge DwPackage::makeVEdge(int var, std::array<vEdge, 2> children) {
     // collapse checks above, which remain valid regardless of the strategy.
     Dw eta = Dw::one();
     if (strategy_ == NormalizationStrategy::Inverse) {
-        eta = children[0].w.isZero() ? children[1].w : children[0].w; // leftmost nonzero
+        const bool leftmostIsSecond = children[0].w.isZero();
+        eta = leftmostIsSecond ? children[1].w : children[0].w; // leftmost nonzero
         if (!eta.isOne()) {
             const Dw etaInv = eta.inverse();
-            children[0].w = children[0].w * etaInv;
-            children[1].w = children[1].w * etaInv;
+            if (leftmostIsSecond) {
+                children[1].w = Dw::one();
+            } else {
+                children[0].w = Dw::one();
+                children[1].w = children[1].w * etaInv;
+            }
         }
     } else if (strategy_ == NormalizationStrategy::Gcd) {
         std::vector<Dw *> nonzero;
@@ -120,19 +126,22 @@ DwPackage::vEdge DwPackage::makeVEdge(int var, std::array<vEdge, 2> children) {
         eta = gcdNormalize(nonzero);
     }
 
-    const detail::VKey key{var, children};
+    detail::VKey key{var, children};
     vUniqueStats_.trackLookup();
-    if (auto it = vUnique_.find(key); it != vUnique_.end()) {
+    const auto [it, inserted] = vUnique_.try_emplace(std::move(key), nullptr);
+    if (!inserted) {
         vUniqueStats_.trackHit();
-        return {it->second, eta};
+        return {it->second, std::move(eta)};
     }
 
-    DwVNode *raw = vMemory_.get();
+    DwVNode *raw = nullptr;
+    raw = vMemory_.get();
+    assert(raw != nullptr);
     raw->var = var;
-    raw->e = children;
-    vUnique_.emplace(key, raw);
+    raw->e = std::move(children);
+    it->second = raw;
     vUniqueStats_.trackInsert(vUnique_);
-    return {raw, eta};
+    return {raw, std::move(eta)};
 }
 
 DwPackage::mEdge DwPackage::makeMEdge(int var, std::array<mEdge, 4> children) {
@@ -149,7 +158,7 @@ DwPackage::mEdge DwPackage::makeMEdge(int var, std::array<mEdge, 4> children) {
     // Redundant-node elimination: identity-like pass-through (off-diagonal
     // zero, both diagonal children identical) doesn't depend on `var`.
     if (children[0] == children[3] && children[1].w.isZero() && children[2].w.isZero())
-        return children[0];
+        return std::move(children[0]);
 
     // Node-weight normalization -- see the analogous block in makeVEdge().
     Dw eta = Dw::one();
@@ -160,8 +169,14 @@ DwPackage::mEdge DwPackage::makeMEdge(int var, std::array<mEdge, 4> children) {
         eta = children[idx].w;
         if (!eta.isOne()) {
             const Dw etaInv = eta.inverse();
-            for (auto &c : children)
-                c.w = c.w * etaInv;
+            // children[idx] becomes exactly one by construction
+            for (std::size_t i = idx; i < children.size(); ++i) {
+                if (i == idx) {
+                    children[i].w = Dw::one();
+                } else {
+                    children[i].w = children[i].w * etaInv;
+                }
+            }
         }
     } else if (strategy_ == NormalizationStrategy::Gcd) {
         std::vector<Dw *> nonzero;
@@ -171,19 +186,22 @@ DwPackage::mEdge DwPackage::makeMEdge(int var, std::array<mEdge, 4> children) {
         eta = gcdNormalize(nonzero);
     }
 
-    const detail::MKey key{var, children};
+    detail::MKey key{var, children};
     mUniqueStats_.trackLookup();
-    if (auto it = mUnique_.find(key); it != mUnique_.end()) {
+    const auto [it, inserted] = mUnique_.try_emplace(std::move(key), nullptr);
+    if (!inserted) {
         mUniqueStats_.trackHit();
-        return {it->second, eta};
+        return {it->second, std::move(eta)};
     }
 
-    DwMNode *raw = mMemory_.get();
+    DwMNode *raw = nullptr;
+    raw = mMemory_.get();
+    assert(raw != nullptr);
     raw->var = var;
-    raw->e = children;
-    mUnique_.emplace(key, raw);
+    raw->e = std::move(children);
+    it->second = raw;
     mUniqueStats_.trackInsert(mUnique_);
-    return {raw, eta};
+    return {raw, std::move(eta)};
 }
 
 // ---------------------------------------------------------------------
@@ -204,10 +222,9 @@ DwPackage::vEdge DwPackage::makeBasisState(const std::size_t n, const std::vecto
         throw std::invalid_argument("makeBasisState: state.size() must equal n");
     vEdge e = vEdge::terminal(Dw::one());
     for (std::size_t i = 0; i < n; ++i) {
-        const std::size_t qubit = start + i;
-        const vEdge e0 = state[i] ? vEdge::zero() : e;
-        const vEdge e1 = state[i] ? e : vEdge::zero();
-        e = makeVEdge(static_cast<int>(qubit), {e0, e1});
+        const auto qubit = static_cast<int>(start + i);
+        e = state[i] ? makeVEdge(qubit, {vEdge::zero(), std::move(e)})
+                     : makeVEdge(qubit, {std::move(e), vEdge::zero()});
     }
     return e;
 }
@@ -233,10 +250,10 @@ DwPackage::vEdge DwPackage::makeBasisState(const std::size_t n, const std::vecto
         const std::size_t qubit = start + idx;
         switch (state[idx]) {
         case BasisState::Zero:
-            e = makeVEdge(static_cast<int>(qubit), {e, vEdge::zero()});
+            e = makeVEdge(static_cast<int>(qubit), {std::move(e), vEdge::zero()});
             break;
         case BasisState::One:
-            e = makeVEdge(static_cast<int>(qubit), {vEdge::zero(), e});
+            e = makeVEdge(static_cast<int>(qubit), {vEdge::zero(), std::move(e)});
             break;
         case BasisState::Plus:
             e = makeVEdge(static_cast<int>(qubit), {vEdge{e.p, e.w * invSqrt2}, vEdge{e.p, e.w * invSqrt2}});
@@ -269,7 +286,7 @@ DwPackage::vEdge DwPackage::makeZeroState() {
 // against a state already confined to that same qubit never touches
 // other qubits), directly reusable as a kronecker() operand.
 DwPackage::vEdge DwPackage::makeRandomSingleQubitState(std::mt19937 &rng, std::size_t depth, std::size_t qubit) {
-    using GateMatrixFn = std::array<Dw, 4> (*)();
+    using GateMatrixFn = const std::array<Dw, 4> &(*)();
     static constexpr std::array<GateMatrixFn, 13> kGatePool{gates::i,   gates::x,  gates::y,  gates::z,
                                                              gates::h,   gates::s,  gates::sdg, gates::t,
                                                              gates::tdg, gates::v,  gates::vdg, gates::sx,
@@ -278,7 +295,7 @@ DwPackage::vEdge DwPackage::makeRandomSingleQubitState(std::mt19937 &rng, std::s
 
     vEdge e = makeBasisState(1, std::vector<BasisState>{BasisState::Zero}, qubit);
     for (std::size_t step = 0; step < depth; ++step) {
-        const auto matrix = kGatePool[dist(rng)]();
+        const auto &matrix = kGatePool[dist(rng)]();
         e = multiply(makeSingleQubitGateDD(qubit, matrix), e);
     }
     return e;
@@ -297,9 +314,9 @@ DwPackage::vEdge DwPackage::makeStateFromVectorRec(std::vector<Dw>::const_iterat
         return vEdge::terminal(*begin);
     const auto half = (end - begin) / 2;
     const int level = static_cast<int>(std::log2(end - begin)) - 1;
-    const vEdge e0 = makeStateFromVectorRec(begin, begin + half);
-    const vEdge e1 = makeStateFromVectorRec(begin + half, end);
-    return makeVEdge(level, {e0, e1});
+    vEdge e0 = makeStateFromVectorRec(begin, begin + half);
+    vEdge e1 = makeStateFromVectorRec(begin + half, end);
+    return makeVEdge(level, {std::move(e0), std::move(e1)});
 }
 
 DwPackage::vEdge DwPackage::makeStateFromVector(const std::vector<Dw> &amplitudes) {
@@ -315,11 +332,11 @@ DwPackage::mEdge DwPackage::makeDDFromMatrixRec(const std::vector<std::vector<Dw
     const std::size_t rowMid = rowStart + (rowEnd - rowStart) / 2;
     const std::size_t colMid = colStart + (colEnd - colStart) / 2;
     const int level = static_cast<int>(std::log2(rowEnd - rowStart)) - 1;
-    const mEdge m00 = makeDDFromMatrixRec(matrix, rowStart, rowMid, colStart, colMid);
-    const mEdge m01 = makeDDFromMatrixRec(matrix, rowStart, rowMid, colMid, colEnd);
-    const mEdge m10 = makeDDFromMatrixRec(matrix, rowMid, rowEnd, colStart, colMid);
-    const mEdge m11 = makeDDFromMatrixRec(matrix, rowMid, rowEnd, colMid, colEnd);
-    return makeMEdge(level, {m00, m01, m10, m11});
+    mEdge m00 = makeDDFromMatrixRec(matrix, rowStart, rowMid, colStart, colMid);
+    mEdge m01 = makeDDFromMatrixRec(matrix, rowStart, rowMid, colMid, colEnd);
+    mEdge m10 = makeDDFromMatrixRec(matrix, rowMid, rowEnd, colStart, colMid);
+    mEdge m11 = makeDDFromMatrixRec(matrix, rowMid, rowEnd, colMid, colEnd);
+    return makeMEdge(level, {std::move(m00), std::move(m01), std::move(m10), std::move(m11)});
 }
 
 DwPackage::mEdge DwPackage::makeDDFromMatrix(const std::vector<std::vector<Dw>> &matrix) {
@@ -370,9 +387,9 @@ std::vector<std::size_t> DwPackage::checkedControls(const std::vector<std::size_
     return sorted;
 }
 
-DwPackage::mEdge DwPackage::wrapWithControl(std::size_t ctrl, const mEdge &active, bool diagonal) {
-    const mEdge inactive = diagonal ? mEdge::terminal(Dw::one()) : mEdge::zero();
-    return makeMEdge(static_cast<int>(ctrl), {inactive, mEdge::zero(), mEdge::zero(), active});
+DwPackage::mEdge DwPackage::wrapWithControl(std::size_t ctrl, mEdge active, bool diagonal) {
+    mEdge inactive = diagonal ? mEdge::terminal(Dw::one()) : mEdge::zero();
+    return makeMEdge(static_cast<int>(ctrl), {std::move(inactive), mEdge::zero(), mEdge::zero(), std::move(active)});
 }
 
 DwPackage::mEdge DwPackage::makeControlledSingleQubitGateDD(const std::vector<std::size_t> &controls,
@@ -390,11 +407,11 @@ DwPackage::mEdge DwPackage::makeControlledSingleQubitGateDD(const std::vector<st
     auto it = sorted.begin();
     for (; it != sorted.end() && *it < target; ++it) {
         for (std::size_t i = 0; i < 4; ++i)
-            em[i] = wrapWithControl(*it, em[i], i == 0 || i == 3);
+            em[i] = wrapWithControl(*it, std::move(em[i]), i == 0 || i == 3);
     }
-    mEdge e = makeMEdge(static_cast<int>(target), em);
+    mEdge e = makeMEdge(static_cast<int>(target), std::move(em));
     for (; it != sorted.end(); ++it)
-        e = wrapWithControl(*it, e, true);
+        e = wrapWithControl(*it, std::move(e), true);
     return e;
 }
 
@@ -430,7 +447,7 @@ DwPackage::mEdge DwPackage::makeControlledTwoQubitGateDD(const std::vector<std::
     for (; it != sorted.end() && *it < lowTarget; ++it) {
         for (std::size_t row = 0; row < 4; ++row) {
             for (std::size_t col = 0; col < 4; ++col)
-                em[row][col] = wrapWithControl(*it, em[row][col], row == col);
+                em[row][col] = wrapWithControl(*it, std::move(em[row][col]), row == col);
         }
     }
 
@@ -443,22 +460,25 @@ DwPackage::mEdge DwPackage::makeControlledTwoQubitGateDD(const std::vector<std::
             std::array<mEdge, 4> local{};
             for (std::size_t i = 0; i < 2; ++i) {
                 for (std::size_t j = 0; j < 2; ++j) {
-                    local[(i * 2) + j] = target0 == highTarget ? em[(row * 2) + i][(col * 2) + j]
-                                                                : em[(i * 2) + row][(j * 2) + col];
+                    // (row, col, i, j) enumerates the 16 em entries bijectively,
+                    // so each is read exactly once across the whole nest and can
+                    // be moved from rather than copied.
+                    local[(i * 2) + j] = target0 == highTarget ? std::move(em[(row * 2) + i][(col * 2) + j])
+                                                                : std::move(em[(i * 2) + row][(j * 2) + col]);
                 }
             }
-            em0[(row * 2) + col] = makeMEdge(static_cast<int>(lowTarget), local);
+            em0[(row * 2) + col] = makeMEdge(static_cast<int>(lowTarget), std::move(local));
         }
     }
 
     for (; it != sorted.end() && *it < highTarget; ++it) {
         for (std::size_t i = 0; i < 4; ++i)
-            em0[i] = wrapWithControl(*it, em0[i], i == 0 || i == 3);
+            em0[i] = wrapWithControl(*it, std::move(em0[i]), i == 0 || i == 3);
     }
 
-    mEdge e = makeMEdge(static_cast<int>(highTarget), em0);
+    mEdge e = makeMEdge(static_cast<int>(highTarget), std::move(em0));
     for (; it != sorted.end(); ++it)
-        e = wrapWithControl(*it, e, true);
+        e = wrapWithControl(*it, std::move(e), true);
     return e;
 }
 
@@ -556,9 +576,9 @@ DwPackage::vEdge DwPackage::addRec(vEdge a, vEdge b) {
 
     const auto ac = vChildrenAt(a.p, var);
     const auto bc = vChildrenAt(b.p, var);
-    const vEdge c0 = addRec({ac[0].p, a.w * ac[0].w}, {bc[0].p, b.w * bc[0].w});
-    const vEdge c1 = addRec({ac[1].p, a.w * ac[1].w}, {bc[1].p, b.w * bc[1].w});
-    return makeVEdge(var, {c0, c1});
+    vEdge c0 = addRec({ac[0].p, a.w * ac[0].w}, {bc[0].p, b.w * bc[0].w});
+    vEdge c1 = addRec({ac[1].p, a.w * ac[1].w}, {bc[1].p, b.w * bc[1].w});
+    return makeVEdge(var, {std::move(c0), std::move(c1)});
 }
 
 DwPackage::vEdge DwPackage::add(const vEdge &a, const vEdge &b) { return addRec(a, b); }
@@ -577,7 +597,7 @@ DwPackage::mEdge DwPackage::addRec(mEdge a, mEdge b) {
     std::array<mEdge, 4> children{};
     for (std::size_t i = 0; i < 4; ++i)
         children[i] = addRec(mEdge{ac[i].p, a.w * ac[i].w}, mEdge{bc[i].p, b.w * bc[i].w});
-    return makeMEdge(var, children);
+    return makeMEdge(var, std::move(children));
 }
 
 // ---------------------------------------------------------------------
@@ -616,10 +636,10 @@ DwPackage::vEdge DwPackage::kroneckerRec(vEdge x, vEdge y, std::size_t yNumQubit
     if (auto it = memo.find(x.p); it != memo.end())
         return {it->second.p, x.w * it->second.w};
 
-    const vEdge r0 = kroneckerRec(x.p->e[0], y, yNumQubits, incIdx, memo);
-    const vEdge r1 = kroneckerRec(x.p->e[1], y, yNumQubits, incIdx, memo);
+    vEdge r0 = kroneckerRec(x.p->e[0], y, yNumQubits, incIdx, memo);
+    vEdge r1 = kroneckerRec(x.p->e[1], y, yNumQubits, incIdx, memo);
     const int idx = x.p->var + (incIdx ? static_cast<int>(yNumQubits) : 0);
-    const vEdge resultUnit = makeVEdge(idx, {r0, r1});
+    const vEdge resultUnit = makeVEdge(idx, {std::move(r0), std::move(r1)});
 
     memo.emplace(x.p, resultUnit);
     return {resultUnit.p, x.w * resultUnit.w};
@@ -647,7 +667,7 @@ DwPackage::mEdge DwPackage::kroneckerRec(mEdge x, mEdge y, std::size_t yNumQubit
     for (std::size_t i = 0; i < 4; ++i)
         r[i] = kroneckerRec(x.p->e[i], y, yNumQubits, incIdx, memo);
     const int idx = x.p->var + (incIdx ? static_cast<int>(yNumQubits) : 0);
-    const mEdge resultUnit = makeMEdge(idx, r);
+    const mEdge resultUnit = makeMEdge(idx, std::move(r));
 
     memo.emplace(x.p, resultUnit);
     return {resultUnit.p, x.w * resultUnit.w};
@@ -706,11 +726,11 @@ DwPackage::mEdge DwPackage::outerProductRec(vEdge x, vEdge y, std::size_t level,
     const int qubit = static_cast<int>(level - 1);
     const auto xc = vChildrenAt(x.p, qubit);
     const auto yc = vChildrenAt(y.p, qubit);
-    const mEdge m00 = outerProductRec(xc[0], yc[0], level - 1, memo);
-    const mEdge m01 = outerProductRec(xc[0], yc[1], level - 1, memo);
-    const mEdge m10 = outerProductRec(xc[1], yc[0], level - 1, memo);
-    const mEdge m11 = outerProductRec(xc[1], yc[1], level - 1, memo);
-    const mEdge resultUnit = makeMEdge(qubit, {m00, m01, m10, m11});
+    mEdge m00 = outerProductRec(xc[0], yc[0], level - 1, memo);
+    mEdge m01 = outerProductRec(xc[0], yc[1], level - 1, memo);
+    mEdge m10 = outerProductRec(xc[1], yc[0], level - 1, memo);
+    mEdge m11 = outerProductRec(xc[1], yc[1], level - 1, memo);
+    const mEdge resultUnit = makeMEdge(qubit, {std::move(m00), std::move(m01), std::move(m10), std::move(m11)});
 
     memo.emplace(key, resultUnit);
     return {resultUnit.p, scale * resultUnit.w};
@@ -726,11 +746,13 @@ DwPackage::mEdge DwPackage::outerProduct(const vEdge &x, const vEdge &y) {
 // ---------------------------------------------------------------------
 
 DwPackage::MeasurementResult DwPackage::measureOneQubit(const vEdge &v, std::size_t qubit, bool outcome) {
-    const std::array<Dw, 4> projector = outcome ? std::array<Dw, 4>{Dw::zero(), Dw::zero(), Dw::zero(), Dw::one()}
-                                                 : std::array<Dw, 4>{Dw::one(), Dw::zero(), Dw::zero(), Dw::zero()};
+    static const std::array<Dw, 4> projectorZero = {Dw::one(), Dw::zero(), Dw::zero(), Dw::zero()};
+    static const std::array<Dw, 4> projectorOne = {Dw::zero(), Dw::zero(), Dw::zero(), Dw::one()};
+    const auto &projector = outcome ? projectorOne : projectorZero;
     const auto projectorDD = makeSingleQubitGateDD(qubit, projector);
-    const vEdge projected = multiply(projectorDD, v);
-    return {projected, innerProduct(projected, projected)};
+    vEdge projected = multiply(projectorDD, v);
+    Dw probability = innerProduct(projected, projected);
+    return {std::move(projected), std::move(probability)};
 }
 
 // fidelity(|a>,|b>) = |<a|b>|^2 / (<a|a><b|b>)
@@ -1113,7 +1135,7 @@ bool DwPackage::garbageCollect(bool force) {
 }
 
 DwPackage::vEdge DwPackage::applyOperation(const mEdge &operation, const vEdge &e) {
-    const vEdge result = multiply(operation, e);
+    vEdge result = multiply(operation, e);
     incRef(result);
     decRef(e);
     garbageCollect();
@@ -1121,7 +1143,7 @@ DwPackage::vEdge DwPackage::applyOperation(const mEdge &operation, const vEdge &
 }
 
 DwPackage::mEdge DwPackage::applyOperation(const mEdge &operation, const mEdge &e) {
-    const mEdge result = multiply(operation, e);
+    mEdge result = multiply(operation, e);
     incRef(result);
     decRef(e);
     garbageCollect();

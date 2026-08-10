@@ -1,11 +1,13 @@
 #include "dd/exact/Dw.hpp"
 #include "utility/HashUtil.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace dd::exact {
 
@@ -13,14 +15,48 @@ namespace {
 /// Negacyclic convolution of two degree-<4 polynomials in w, reduced modulo
 /// w^4 = -1. This is Z[w] multiplication expressed on the {1,w,w^2,w^3}
 /// coefficient tuple, independent of any sqrt(2)^k/e scaling.
-std::array<Integer, 4> mulTuple(const std::array<Integer, 4> &x, const std::array<Integer, 4> &y) {
-    const auto &[a0, a1, a2, a3] = x;
-    const auto &[b0, b1, b2, b3] = y;
+std::array<Integer, 4> mulTuple(const Integer &a0, const Integer &a1, const Integer &a2, const Integer &a3,
+                                const Integer &b0, const Integer &b1, const Integer &b2, const Integer &b3) {
     return {
         a0 * b0 - a1 * b3 - a2 * b2 - a3 * b1,
         a0 * b1 + a1 * b0 - a2 * b3 - a3 * b2,
         a0 * b2 + a1 * b1 + a2 * b0 - a3 * b3,
         a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0,
+    };
+}
+
+/// The two nonzero components of the Z[w] norm tuple z * conj(z), where
+/// conj(z) is conjugate() -- i.e. of mulTuple({a,b,c,d}, {a,-d,-c,-b}). That
+/// product is always of the form (x, y, 0, -y), and expanding the convolution
+/// against that specific second operand collapses it to closed forms:
+///     out0 = a*a - b*(-b) - c*(-c) - d*(-d)  = a^2 + b^2 + c^2 + d^2  = x
+///     out1 = a*(-d) + b*a - c*(-b) - d*(-c)  = ab + bc + cd - ad      = y
+///     out2 = a*(-c) + b*(-d) + c*a - d*(-b)  = 0
+///     out3 = a*(-b) + b*(-c) + c*(-d) + d*a  = -(ab + bc + cd - ad)   = -y
+/// so x and y together cost 8 multiplications rather than the 16 a generic
+/// mulTuple() performs, and the two structurally-known components cost none.
+///
+/// Note quarticNorm() uses these same closed forms but with the opposite sign
+/// convention on y (it writes +da where this writes -ad). That is harmless
+/// there, since it only ever squares the value; the sign matters here, because
+/// inverse() uses y linearly in its numerator.
+std::pair<Integer, Integer> normXY(const Integer &a, const Integer &b, const Integer &c, const Integer &d) {
+    return {a * a + b * b + c * c + d * d, a * b + b * c + c * d - a * d};
+}
+
+/// mulTuple(A, {x, -y, 0, y}) specialised for that second operand. Its zero
+/// third component and its repeated +-y collapse the generic 16 products to 8
+/// (one by x and one by y per output):
+///     out0 = A0*x - A1*y        + A3*y = A0*x + y*(A3 - A1)
+///     out1 = A1*x - A0*y - A2*y        = A1*x - y*(A0 + A2)
+///     out2 = A2*x - A1*y - A3*y        = A2*x - y*(A1 + A3)
+///     out3 = A3*x + A0*y - A2*y        = A3*x + y*(A0 - A2)
+std::array<Integer, 4> mulByConjNormNumer(const std::array<Integer, 4> &A, const Integer &x, const Integer &y) {
+    return {
+        A[0] * x + y * (A[3] - A[1]),
+        A[1] * x - y * (A[0] + A[2]),
+        A[2] * x - y * (A[1] + A[3]),
+        A[3] * x + y * (A[0] - A[2]),
     };
 }
 
@@ -121,11 +157,12 @@ void Dw::canonicalize() {
 // full Z[w] ring multiplication per step) multiplying by sqrt(2) and
 // checking 4-way divisibility by 2.
 void Dw::reduceSqrt2Power() {
-    while (k_ > 0 && (a_ - c_) % 2 == 0 && (b_ - d_) % 2 == 0) {
-        const Integer newA = (b_ - d_) / 2;
-        const Integer newB = (a_ + c_) / 2;
-        const Integer newC = (b_ + d_) / 2;
-        const Integer newD = (c_ - a_) / 2;
+    while (k_ > 0 && boost::multiprecision::bit_test(a_, 0) == boost::multiprecision::bit_test(c_, 0) &&
+           boost::multiprecision::bit_test(b_, 0) == boost::multiprecision::bit_test(d_, 0)) {
+        const Integer newA = (b_ - d_) >> 1;
+        const Integer newB = (a_ + c_) >> 1;
+        const Integer newC = (b_ + d_) >> 1;
+        const Integer newD = (c_ - a_) >> 1;
         a_ = newA;
         b_ = newB;
         c_ = newC;
@@ -135,11 +172,12 @@ void Dw::reduceSqrt2Power() {
 }
 
 void Dw::reduceRationalDenominator() {
-    // Phase 1: Extract all powers of 2 from e into k exponent.
-    // This ensures e_ becomes odd before we compute gcd.
-    while (e_ % 2 == 0) {
-        e_ /= 2;
-        k_ += 2;
+    // Phase 1: Extract ALL powers of 2 from e into the k exponent, so that e_
+    // is odd before the gcd below.
+    assert(e_ > 0 && "Dw: denominator must stay positive");
+    if (const auto twos = boost::multiprecision::lsb(e_); twos != 0) {
+        e_ >>= twos;
+        k_ += 2 * static_cast<std::size_t>(twos);
     }
 
     // Phase 2: Reduce gcd(a,b,c,d,e_) to 1.
@@ -148,8 +186,13 @@ void Dw::reduceRationalDenominator() {
     // and (b-d), so this phase alone can never expose a new sqrt(2) common
     // factor -- only phase 1 above can.
     if (e_ != 1) {
-        const Integer g = boost::multiprecision::gcd(
-            boost::multiprecision::gcd(boost::multiprecision::gcd(a_, b_), boost::multiprecision::gcd(c_, d_)), e_);
+        Integer g = e_;
+        for (const Integer *v : {&a_, &b_, &c_, &d_}) {
+            g = boost::multiprecision::gcd(g, *v);
+            if (g == 1) {
+                break;
+            }
+        }
         if (g > 1) {
             a_ /= g;
             b_ /= g;
@@ -171,14 +214,26 @@ bool Dw::operator==(const Dw &other) const noexcept {
 
 Dw Dw::operator+(const Dw &other) const {
     const std::size_t k = std::max(k_, other.k_);
-    auto lhs = scaleUp({a_, b_, c_, d_}, k - k_);
-    auto rhs = scaleUp({other.a_, other.b_, other.c_, other.d_}, k - other.k_);
-    // Common (not necessarily minimal) denominator e_ * other.e_;
-    // canonicalize() reduces it back down.
-    for (auto &x : lhs)
-        x *= other.e_;
-    for (auto &x : rhs)
-        x *= e_;
+    const bool scaleL = k != k_;
+    const bool scaleR = k != other.k_;
+    const bool sameE = e_ == other.e_;
+    if (!scaleL && !scaleR && sameE) {
+        return {a_ + other.a_, b_ + other.b_, c_ + other.c_, d_ + other.d_, k, e_};
+    }
+    std::array<Integer, 4> lhs{a_, b_, c_, d_};
+    std::array<Integer, 4> rhs{other.a_, other.b_, other.c_, other.d_};
+    if (scaleL)
+        lhs = scaleUp(std::move(lhs), k - k_);
+    if (scaleR)
+        rhs = scaleUp(std::move(rhs), k - other.k_);
+    if (sameE)
+        return {lhs[0] + rhs[0], lhs[1] + rhs[1], lhs[2] + rhs[2], lhs[3] + rhs[3], k, e_};
+    if (other.e_ != 1)
+        for (auto &x : lhs)
+            x *= other.e_;
+    if (e_ != 1)
+        for (auto &x : rhs)
+            x *= e_;
     return {lhs[0] + rhs[0], lhs[1] + rhs[1], lhs[2] + rhs[2], lhs[3] + rhs[3], k, e_ * other.e_};
 }
 
@@ -190,8 +245,9 @@ Dw Dw::operator*(const Dw &other) const {
     if (isOne()) return other;
     if (other.isOne()) return *this;
     if (isZero() || other.isZero()) return Dw::zero();
-    const auto product = mulTuple({a_, b_, c_, d_}, {other.a_, other.b_, other.c_, other.d_});
-    return {product[0], product[1], product[2], product[3], k_ + other.k_, e_ * other.e_};
+    auto product = mulTuple(a_, b_, c_, d_, other.a_, other.b_, other.c_, other.d_);
+    return {std::move(product[0]), std::move(product[1]), std::move(product[2]), std::move(product[3]),
+            k_ + other.k_, e_ * other.e_};
 }
 
 Dw Dw::conjugate() const { return {a_, -d_, -c_, -b_, k_, e_}; }
@@ -201,11 +257,10 @@ Dw Dw::inverse() const {
         throw std::domain_error("Dw::inverse: division by zero");
     }
     const std::array<Integer, 4> conjN{a_, -d_, -c_, -b_};
-    const std::array<Integer, 4> normTuple = mulTuple({a_, b_, c_, d_}, conjN);
-    // normTuple is always of the form (x, y, 0, -y) -- see normSquared()'s
-    // doc comment (a mathematical fact of Z[w] conjugation).
-    const Integer &x = normTuple[0];
-    const Integer &y = normTuple[1];
+    // The norm tuple is always of the form (x, y, 0, -y) -- a mathematical
+    // fact of Z[w] conjugation -- so only x and y are computed, via normXY()'s
+    // closed forms rather than a full 16-product mulTuple().
+    const auto [x, y] = normXY(a_, b_, c_, d_);
 
     // 1/(x + y*sqrt(2)) = (x - y*sqrt(2)) / (x^2 - 2*y^2), exact integers.
     Integer d = x * x - 2 * y * y;
@@ -215,14 +270,15 @@ Dw Dw::inverse() const {
     assert(d != 0);
 
     // (x - y*sqrt(2)) as a Z[w] tuple: sqrt2 = w - w^3, so x - y*sqrt(2) =
-    // x - y*w + y*w^3 -> (x, -y, 0, y).
-    const std::array<Integer, 4> invNormNumer{x, -y, 0, y};
-    std::array<Integer, 4> numerator = mulTuple(conjN, invNormNumer);
+    // x - y*w + y*w^3 -> (x, -y, 0, y). Multiplying conjN by that tuple is
+    // specialised in mulByConjNormNumer(), which exploits its zero component
+    // and repeated +-y to use 8 products instead of mulTuple()'s 16.
+    std::array<Integer, 4> numerator = mulByConjNormNumer(conjN, x, y);
 
     // Fold in this->k_: multiplying the value by sqrt(2)^k_ (as opposed to
     // dividing by it) is done by scaling the raw tuple by sqrt(2)^k_
     // directly, leaving the exponent field at 0 for this contribution.
-    numerator = scaleUp(numerator, k_);
+    numerator = scaleUp(std::move(numerator), k_);
 
     // Fold in this->e_ (a plain integer multiplier: dividing by 1/e_ ==
     // multiplying by e_).
@@ -236,7 +292,8 @@ Dw Dw::inverse() const {
             v = -v;
     }
 
-    return {numerator[0], numerator[1], numerator[2], numerator[3], 0, d};
+    return {std::move(numerator[0]), std::move(numerator[1]), std::move(numerator[2]), std::move(numerator[3]),
+            0, std::move(d)};
 }
 
 Dw Dw::gcd(const Dw &other) const {
@@ -245,9 +302,9 @@ Dw Dw::gcd(const Dw &other) const {
     Dw z2 = other;
     while (!z2.isZero()) {
         const Dw q = roundedDivide(z1, z2);
-        const Dw r = z1 - q * z2;
-        z1 = z2;
-        z2 = r;
+        Dw r = z1 - q * z2;
+        z1 = std::move(z2);
+        z2 = std::move(r);
     }
     return z1;
 }
@@ -262,16 +319,16 @@ Dw Dw::reduceNorm() const {
     bool improved = true;
     while (improved) {
         improved = false;
-        const Dw up = candidate * unit;
-        const Dw down = candidate * unitInv;
+        Dw up = candidate * unit;
+        Dw down = candidate * unitInv;
         const Integer upNorm = up.quarticNorm();
         const Integer downNorm = down.quarticNorm();
         if (upNorm < bestNorm && upNorm <= downNorm) {
-            candidate = up;
+            candidate = std::move(up);
             bestNorm = upNorm;
             improved = true;
         } else if (downNorm < bestNorm) {
-            candidate = down;
+            candidate = std::move(down);
             bestNorm = downNorm;
             improved = true;
         }
@@ -286,10 +343,13 @@ Dw Dw::lexicographicalMinimum() const {
     };
     Dw best = *this;
     Dw rotated = *this;
+    auto bestAbs = absTuple(best);
     for (int i = 1; i < 4; ++i) {
         rotated = rotated * Dw::omega();
-        if (absTuple(rotated) < absTuple(best)) {
+        auto rotatedAbs = absTuple(rotated);
+        if (rotatedAbs < bestAbs) {
             best = rotated;
+            bestAbs = std::move(rotatedAbs);
         }
     }
     if (best.d() < 0) {
@@ -344,6 +404,21 @@ std::string Dw::toString() const {
 }
 
 std::size_t Dw::hash() const noexcept {
+    // Two thirds of the values hashed during a unique-table probe are exactly
+    // zero or one (measured: 67.4% on Grover n=18, 67.9% on the mixed default
+    // suite). That is structural rather than incidental -- makeVEdge/makeMEdge
+    // leave the leftmost nonzero child weight exactly Dw::one(), and every
+    // child before it exactly Dw::zero() -- so both predicates are worth
+    // testing up front. Each is a handful of comparisons against small
+    // integers, replacing five hash_value() calls over Integer plus four mixes.
+    constexpr std::size_t kZeroHash = 0x9e3779b97f4a7c15ULL;
+    constexpr std::size_t kOneHash = 0xbf58476d1ce4e5b9ULL;
+    if (isZero()) {
+        return kZeroHash;
+    }
+    if (isOne()) {
+        return kOneHash;
+    }
     std::size_t h = hash_value(a_);
     for (const Integer *v : {&b_, &c_, &d_, &e_}) {
         h = HashUtil::combinedHash(h, hash_value(*v));

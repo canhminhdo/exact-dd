@@ -32,7 +32,7 @@ namespace dd::exact {
  */
 class ExactDDSimulation {
 public:
-    explicit ExactDDSimulation(std::size_t nqubits);
+    explicit ExactDDSimulation(std::size_t nqubits, NormalizationStrategy strategy = NormalizationStrategy::Inverse);
 
     [[nodiscard]] DwPackage &package() { return pkg_; }
     [[nodiscard]] const DwPackage::vEdge &state() const { return state_; }

@@ -161,14 +161,15 @@ void groverDiffuser(ExactDDSimulation &sim, std::size_t n, const std::vector<std
 // Exercises multiply and add far harder than the state-construction cases:
 // the diffuser's superposition-wide reflection is where add's recursion
 // actually has shared subgraphs to re-walk.
-void benchGrover(const std::vector<std::size_t> &sizes) {
+void benchGrover(const std::vector<std::size_t> &sizes, bool withStatistics = false,
+                 NormalizationStrategy strategy = NormalizationStrategy::Inverse) {
     reportHeader("Grover (marking |1...1>, optimal iterations)");
     for (const std::size_t n : sizes) {
         std::vector<std::size_t> controls(n - 1);
         std::iota(controls.begin(), controls.end(), 0);
 
         const auto start = Clock::now();
-        ExactDDSimulation sim(n);
+        ExactDDSimulation sim(n, strategy);
         for (std::size_t q = 0; q < n; ++q)
             sim.applyGate("h", q);
 
@@ -184,6 +185,11 @@ void benchGrover(const std::vector<std::size_t> &sizes) {
         const double prob = static_cast<double>(sim.amplitude(mark).normSquared().toComplexFloat().real());
         reportRow(n, ms, sim.package().vNodeCount(), sim.package().mNodeCount());
         std::cout << "  " << iterations << " iteration(s), P(|1...1>) = " << prob << "\n";
+
+        if (withStatistics) {
+            sim.package().printStatistics();
+            std::cout << "\n";
+        }
     }
 }
 
@@ -222,14 +228,36 @@ void benchStatisticsReport(std::size_t n) {
 // EXACT_DD_WITH_GMP choice hinges on, and the large sizes are far too slow to
 // belong in the default run:
 //     ExactDDBench 16 18 20
+// The argv form additionally dumps a full statistics report per size, which is
+// how "where does Grover's cost go" gets answered at sizes that matter. The
+// no-argument form deliberately does not, so its output stays comparable
+// against recorded baselines.
 int main(int argc, char **argv) {
     std::cout << "exact-dd scaling benchmark\n";
 
     if (argc > 1) {
         std::vector<std::size_t> sizes;
-        for (int i = 1; i < argc; ++i)
-            sizes.push_back(static_cast<std::size_t>(std::stoul(argv[i])));
-        benchGrover(sizes);
+        auto strategy = NormalizationStrategy::Inverse;
+        std::string strategyName = "inverse";
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg(argv[i]);
+            if (arg.rfind("--strategy=", 0) == 0) {
+                strategyName = arg.substr(11);
+                if (strategyName == "none") {
+                    strategy = NormalizationStrategy::None;
+                } else if (strategyName == "gcd") {
+                    strategy = NormalizationStrategy::Gcd;
+                } else if (strategyName != "inverse") {
+                    std::cerr << "unknown --strategy=" << strategyName
+                              << " (expected none|inverse|gcd)\n";
+                    return 1;
+                }
+                continue;
+            }
+            sizes.push_back(static_cast<std::size_t>(std::stoul(arg)));
+        }
+        std::cout << "normalization strategy: " << strategyName << "\n";
+        benchGrover(sizes, true, strategy);
         std::cout << "\ndone\n";
         return 0;
     }
