@@ -140,6 +140,37 @@ void benchOuterProduct(const std::vector<std::size_t> &sizes) {
     }
 }
 
+// H on every qubit of |0...0>: the n-fold Hadamard transform, giving the
+// equal superposition in which all 2^n amplitudes are exactly 1/sqrt(2)^n.
+// The state stays a product state throughout, so its DD is one node per
+// level and no coefficient ever grows past a numerator of 1.
+void benchHadamardTransform(const std::vector<std::size_t> &sizes) {
+    reportHeader("Hadamard transform H^(x)n on |0...0>");
+    for (const std::size_t n : sizes) {
+        const auto start = Clock::now();
+        ExactDDSimulation sim(n);
+        for (std::size_t q = 0; q < n; ++q)
+            sim.applyGate("h", q);
+        const double ms = elapsedMs(start);
+
+        reportRow(n, ms, sim.package().vNodeCount(), sim.package().mNodeCount());
+
+        // Both extremes must equal 1/sqrt(2)^n on the nose. This is a
+        // canonical-form check as much as a correctness one: a stray factor
+        // of sqrt(2) left unreduced in k would show up here and nowhere else
+        // in this bench, since every other quantity stays 1.
+        const Dw expected(1, 0, 0, 0, n);
+        const Dw first = sim.amplitude(std::vector<bool>(n, false));
+        const Dw last = sim.amplitude(std::vector<bool>(n, true));
+        if (first != expected)
+            std::cout << "  !! amplitude(0...0) = " << first.toString() << ", expected "
+                      << expected.toString() << "\n";
+        if (last != expected)
+            std::cout << "  !! amplitude(1...1) = " << last.toString() << ", expected "
+                      << expected.toString() << "\n";
+    }
+}
+
 // Phase-flips |1...1> with a native (n-1)-controlled Z.
 void groverOracle(ExactDDSimulation &sim, std::size_t n, const std::vector<std::size_t> &controls) {
     sim.applyMultiControlledGate("z", controls, n - 1);
@@ -265,6 +296,7 @@ int main(int argc, char **argv) {
     benchInnerProductUniform({4, 8, 12, 16});
     benchGhzMeasureSweep({4, 8, 12, 16});
     benchOuterProduct({4, 8, 12, 16});
+    benchHadamardTransform({64, 128, 256, 512});
     benchGrover({6, 10, 14});
     benchStatisticsReport(12);
 
